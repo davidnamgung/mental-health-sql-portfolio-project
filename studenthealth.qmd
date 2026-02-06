@@ -1,0 +1,423 @@
+---
+title: "Analyzing 2019 Japanese Student's Mental Health"
+author: "David Namgung"
+date: "02/05/2026"
+format: 
+    html:
+        df-print: paged
+        mainfont: "Lato"   # Roboto, Inter, Merriweather, Lato, Montserrat
+        monofont: "Fira Code"    # Code Font
+        title-block-banner: true # Banner Header
+        title-block-banner-color: "white" # Banner Text Color
+        highlight-style: dracula  # dracula, github, atom-one, ayu
+        theme:
+            light: flatly # cosmo
+            dark: darkly 
+        toc: true           # Table of Contents
+        toc-depth: 2
+        toc-location: left  # TOC on the left sidebar
+        code-tools: true    # "Source Code" menu
+        code-link: true     # Makes function names clickable
+        code-fold: true
+        smooth-scroll: true
+editor: source
+---
+
+```{r setup, include=FALSE}
+library(DBI)
+library(RPostgres)
+
+con <- dbConnect(RPostgres::Postgres(), 
+    dbname = "postgres", 
+    host = "localhost", 
+    port = 5432,
+    user = "postgres",
+    password = "your_password")
+```
+
+```{r, include=FALSE}
+df <- read.csv("students.csv")
+dbWriteTable(con, "students", df, overwrite = TRUE)
+```
+
+[<i class="bi bi-download"></i> Raw .csv File](students.csv){.btn .btn-primary download="students.csv"}
+
+[<i class="bi bi-journal-text"></i> Original Article](https://www.mdpi.com/518772){.btn .btn-primary target="_blank"}
+
+__Tags:__ Data Analysis, Exploratory Analysis, Data Cleaning, Data Transformation, Filtering, Data Aggregation, Data Manipulaton, RMarkdown, R, Quarto, PostfreSQL, SQL.
+
+::: {.callout-important}
+## Important Note!
+This project is an independent replication of an existing study, designed to demonstrate technical proficiency in **SQL and Data Anaysis**. 
+
+While the dataset and findings align with **[the article](qmdpi.com/2306-5729/4/3/124)** , the queries, logic, and code structure presented here are original implementations for portfolio purposes only.
+:::
+
+<br>
+<br>
+
+## 1. Context
+
+__Mental health in students...__
+
+Does going to university in a different country affect your mental health? A Japanese international university surveyed its students in 2018 and published a study the following year that was approved by several ethical and regulatory boards.
+
+The study found that international students have a higher risk of mental health difficulties than the general population, and that social connectedness (belonging to a social group) and acculturative stress (stress associated with joining a new culture) are predictive of depression.
+
+We'll be exploring the article's dataset using PostgreSQL to find out if we would come to a similar conclusion for international students and see if the length of stay is a contributing factor.
+
+<br>
+<br>
+
+## 2. Data 
+
+::: {.callout-note}
+## Project Scope
+This analysis uses a dataset of **250+ students** collected in 2023 from a 2018 research study. 
+There are 286 rows and 51 columns. 
+:::
+
+```{r}
+#| echo: false
+#| warning: false
+
+library(knitr)
+library(dplyr)
+
+# Create the data for the dictionary
+data_dictionary <- tibble::tribble(
+  ~"Column Name", ~"Data Type", ~"Description",
+  "inter_dom",  "VARCHAR",        "Types of students (international or domestic)",
+  "japanese_cate",  "VARCHAR",       "Japanese language proficiency",
+  "english_cate",       "VARCHAR",    "English language proficiency.",
+  "academic",       "VARCHAR",      "Current academic level (undergraduate or graduate)",
+  "age", "INT", "Current age of student",
+  "stay", "INT", "Current length of stay in years",
+  "todep", "VARCHAR", "Total score of depression (PHQ-9 test)",
+  "tosc", "INT", "Total score of social connectedness (SCS test)",
+  "toas", "INT", "Total score of acculturative stress (ASISS test)"
+)
+
+# Print the table nicely
+kable(data_dictionary, caption = "Key Columns")
+```
+
+
+::: {.overflow-scroll style="max-height: 400px; white-space: nowrap;"}
+:::
+
+::: {.column-margin}
+**Note:** Quarto's knitr, by default, gives 10 rows for this query.
+:::
+```{sql connection=con, output.var="my_data"}
+SELECT * 
+FROM students;
+```
+
+```{r, echo=FALSE}
+library(DT)
+
+datatable(my_data, 
+  options = list(
+    pageLength = 10,        # Shows 10 rows per page
+    autoWidth = TRUE,
+    scrollX = TRUE,         # Adds horizontal scrolling
+    dom = 'Bfrtip'          # Adds the Buttons and Search bar
+  )
+)
+```
+
+<br>
+<br>
+
+## 3. Analysis
+
+### Data Cleaning
+::: {.callout-note}
+## Incomplete rows
+Based on a first look, we can observe rows entirely empty, missing key demographic information which can alter the final findings. Thus, we'll need to create a new table excluding it.
+:::
+
+```{sql connection=con, max.print=20}
+SELECT * 
+FROM students
+WHERE 
+    inter_dom IS NULL OR 
+    age IS NULL OR 
+    gender IS NULL;
+```
+
+#### Clean table
+```{sql connection=con}
+-- Creates a new table excluding the null rows found above
+/* CREATE TABLE students_clean AS
+SELECT *
+FROM students
+WHERE inter_dom IS NOT NULL 
+  AND age IS NOT NULL 
+  AND gender IS NOT NULL; */ 
+```
+
+#### Verify new table
+```{sql connection=con}
+/* SELECT * 
+FROM students_clean 
+WHERE inter_dom IS NULL ;*/
+
+-- No empty rows
+```
+
+```{sql connection=con, output.var="my_data"}
+SELECT *
+FROM students_clean;
+```
+```{r, echo=FALSE}
+library(DT)
+
+datatable(my_data, 
+  options = list(
+    pageLength = 10,        # Shows 10 rows per page
+    autoWidth = TRUE,
+    scrollX = TRUE,         # Adds horizontal scrolling
+    dom = 'Bfrtip'          # Adds the Buttons and Search bar
+  )
+)
+```
+
+<br>
+
+#### Important values missing
+
+::: {.callout-note}
+## NULL Values
+I want to make sure that the key variables we will use in our analysis are not NULL.
+:::
+
+```{sql connection=con}
+/* SELECT * 
+FROM students_clean
+WHERE toas IS NULL OR
+    todep IS NULL OR
+    tosc IS NULL OR
+    stay IS NULL; */
+```
+<br>
+<br>
+
+### Story
+3.1 
+<br>
+How does the length of stay (stay) impact the average mental health diagnostic scores of the international students present in the study.
+
+```{sql connection=con}
+SELECT stay, 
+    COUNT(*) AS count_int,
+    ROUND(AVG(todep),2) AS average_phq, 
+    ROUND(AVG(tosc),2) AS average_scs,
+    ROUND(AVG(toas),2) AS average_as
+FROM students_clean
+WHERE inter_dom = 'Inter'
+GROUP BY stay
+ORDER BY stay DESC
+```
+
+::: {.callout-tip}
+## 💡 Findings
+The table suggests a non-linear relationship between length of stay and acculturative stress.
+Stress scores appear to peak around years 4-5 (reaching ~91.0)
+:::
+
+<br>
+<br>
+
+3.2 
+<br>
+How do the diagnostic scores (Depression, Social Connectedness, Acculturative Stress) compare between International and Domestic students?
+
+```{sql connection=con}
+SELECT 
+    inter_dom AS student_type,
+    COUNT(*) AS total_students,
+    ROUND(AVG(todep), 2) AS avg_depression,
+    ROUND(AVG(tosc), 2) AS avg_social_connectedness,
+    ROUND(AVG(toas), 2) AS avg_acculturative_stress
+FROM students_clean
+GROUP BY inter_dom;
+```
+
+::: {.callout-tip}
+## 💡 Findings
+While International students experience slightly higher Acculturative Stress (75.6 vs 62.8), they actually report slightly lower average Depression scores (8.0) compared to Domestic students (8.6). However, both groups are very similar. 
+:::
+
+<br>
+<br>
+3.3 
+<br>
+Is there a correlation between Japanese language proficiency and Social Connectedness?
+
+```{sql connection=con}
+SELECT 
+    japanese_cate AS language_proficiency,
+    ROUND(AVG(tosc), 2) AS avg_social_connectedness,
+    MIN(tosc) AS min_score,
+    MAX(tosc) AS max_score
+FROM students_clean
+GROUP BY japanese_cate
+ORDER BY avg_social_connectedness DESC; -- See which group scores highest
+```
+
+::: {.callout-tip}
+## 💡 Findings
+Students with High proficiency report the highest Social Connectedness scores (38.0), whereas those with Low proficiency score the lowest (36.8)
+:::
+<br>
+<br>
+3.4 
+<br>
+Does high Social Connectedness (tosc) actually lead to lower Depression (todep)?
+
+```{sql connection=con}
+/* Binning Social Connectedness scores to see the trend in Depression */
+SELECT 
+    -- Creating ranges like 0-9, 10-19, 20-29, etc.
+    FLOOR(tosc / 10) * 10 AS social_score_range,
+    COUNT(*) AS number_of_students,
+    ROUND(AVG(todep), 2) AS avg_depression_score,
+    ROUND(AVG(toas), 2) AS avg_acculturative_stress
+FROM students_clean
+GROUP BY social_score_range
+ORDER BY social_score_range;
+```
+
+::: {.callout-tip}
+## 💡 Findings
+Average depression score drop as the Social Correctednessscore rises.
+This identifies social isolation as a critical predictor for higher depression levels.
+:::
+
+<br>
+<br>
+
+3.5 
+<br>
+How many students fall into "High", "Medium", and "Low" risk categories for depression?
+
+```{sql connection=con}
+/* Query to categorize students by age group and depression score */
+SELECT 
+    age,
+    -- Create a new category based on depression score (todep)
+    CASE 
+        WHEN todep >= 10 THEN 'High Risk'
+        WHEN todep BETWEEN 5 AND 9 THEN 'Medium Risk'
+        ELSE 'Low Risk'
+    END AS risk_category,
+    COUNT(*) AS student_count
+FROM students_clean
+GROUP BY age, risk_category
+ORDER BY age, risk_category;
+```
+
+::: {.callout-tip}
+## 💡 Findings
+We can see that specific age groups may have a higher concentration of "High Risk"
+:::
+<br>
+<br>
+
+3.6 
+<br>
+How do Gender and Academic Level interact regarding mental health?
+
+```{sql connection=con}
+SELECT 
+    gender,
+    academic, -- Graduate vs Undergraduate
+    COUNT(*) AS total_students,
+    ROUND(AVG(todep), 2) AS avg_depression,
+    ROUND(AVG(toas), 2) AS avg_stress
+FROM students_clean
+WHERE gender IS NOT NULL AND academic IS NOT NULL
+GROUP BY gender, academic
+ORDER BY avg_depression DESC; -- Sorting to see the most 'at risk' group first
+```
+
+::: {.callout-tip}
+## 💡 Findings
+Undergraduate students report higher depression levels than Graduate students across both genders. Female Undergraduates appear to be the most vulnerable group (Avg Score: 8.5), while Male Graduates report the lowest depression levels (Avg Score: 2.5).
+:::
+<br>
+<br>
+
+3.7 
+<br>
+Is there a measurable difference in scores for students who have considered suicide?
+
+```{sql connection=con}
+SELECT 
+    suicide AS suicide_risk,
+    COUNT(*) AS student_count,
+    ROUND(AVG(todep), 2) AS avg_depression,
+    ROUND(AVG(toas), 2) AS avg_acculturative_stress,
+    ROUND(AVG(tosc), 2) AS avg_social_connectedness
+FROM students_clean
+WHERE suicide IS NOT NULL
+GROUP BY suicide;
+```
+
+::: {.callout-tip}
+## 💡 Findings
+Students who reported considering suicide have drastically higher average Depression and Acculturative Stress scores.
+:::
+<br>
+<br>
+
+3.8 
+<br>
+Who are the students with the absolute highest Acculturative Stress, and what are their demographics?
+
+```{sql connection=con}
+/* Find the demographics of students with the max stress score */
+SELECT 
+    age, 
+    gender, 
+    stay, 
+    japanese_cate, 
+    toas AS stress_score
+FROM students_clean
+WHERE toas = (SELECT MAX(toas) FROM students_clean);
+```
+
+::: {.callout-tip}
+## 💡 Findings
+Identifying outliers reveals that the highest stress scores often do not correlate with a single demographic profile, but rather individual circumstances. This emphasizes that while averages tell a story, individual monitoring is crucial.
+:::
+
+## Summary
+
+Based on the analysis of the students dataset, the following key trends regarding the mental health of international and domestic students were identified:
+
+The "Paradox" of International Students: Despite facing significantly higher Acculturative Stress (75.6) compared to domestic students (62.8), international students reported slightly lower average Depression scores. This suggests that while adapting to a new culture is stressful, it does not inherently lead to higher rates of depression compared to the local population.
+
+The "Culture Shock": Acculturative stress does not decrease linearly. It appears to rise and peak around the 4th to 5th year of stay before dropping significantly. Support systems should be targeted not just at new arrivals, but at students in the middle of their academic journey.
+
+Social Connection as a Buffer: A strong inverse relationship was found between Social Connectedness and Depression. Students with stronger social ties consistently showed lower depression scores, regardless of their origin. Language proficiency acts as a moderate enabler for this connectedness.
+
+Most Vulnerable Demographics: Female Undergraduate students were identified as the demographic with the highest average depression scores (8.5), whereas Male Graduate students showed the highest resilience (2.5).
+
+Recommendation: Interventions should prioritize Undergraduate females and focus on social integration programs (to boost connectedness) rather than solely focusing on academic stress reduction.
+<br>
+<br>
+
+### Limitations
+
+::: {.callout-warning appearance="simple"}
+## ⚠️ Limitations & Considerations
+* **Sample Size:** The dataset (N=~268) is relatively small, which limits the statistical power of subgroup analyses. The the sample size is not be large enough to be statistically representative of the entire international student population in Japan.
+* **Study Design:** This is a cross-sectional study. Trends observed across "Length of Stay" represent different student cohorts, not the same individuals over time. Therefore, the "peak stress" observed in Year 4 may reflect the specific characteristics of that cohort rather than a universal timeline of adaptation.
+* **Bias:** Results rely on self-reported data, which is subject to social desirability bias. Additionally, excluding incomplete rows during cleaning may have introduced exclusion bias.
+* **Lack of Causality** : While the analysis identifies some correlations (e.g., between Social Connectedness and lower Depression), it cannot confirm causality. It is unclear whether social connection protects against depression, or if depression causes students to withdraw socially.
+:::
+
+
